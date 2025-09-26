@@ -1,0 +1,59 @@
+// device-client.js
+const fetch = require('node-fetch');
+const fs = require('fs');
+const crypto = require('crypto');
+
+const SERVER_BASE = 'http://localhost:4000';
+const DEVICE_ID = 'device-1234';
+const OWNER = 'user@example.com';
+
+async function registerDevice() {
+  const res = await fetch(`${SERVER_BASE}/api/devices/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId: DEVICE_ID, owner: OWNER })
+  });
+  return res.json();
+}
+
+async function getPublicKey() {
+  const res = await fetch(`${SERVER_BASE}/api/keys/public`);
+  return res.text();
+}
+
+function verifySignature(manifestObj, signature, publicKey) {
+  const manifestJson = JSON.stringify(manifestObj);
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(manifestJson);
+  verifier.end();
+  return verifier.verify(publicKey, signature, 'base64');
+}
+
+async function run() {
+  const reg = await registerDevice();
+  console.log('Registration response:', reg);
+  const token = reg.token;
+
+  const manifestRes = await fetch(`${SERVER_BASE}/api/updates/manifest`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const signed = await manifestRes.json();
+  console.log('Received signed manifest:', signed);
+
+  const publicKey = await getPublicKey();
+
+  const ok = verifySignature(signed.manifest, signed.signature, publicKey);
+  console.log('Manifest signature valid?', ok);
+
+  if (!ok) {
+    console.error('Signature invalid — aborting update.');
+    return;
+  }
+
+  // validate manifest structure and package hash, timestamp, etc.
+  // then download package only if hashes match, etc.
+  console.log('Manifest validated. Proceed to download package:', signed.manifest.packageUrl);
+  // (Simulated) download & verify package integrity before applying.
+}
+
+run().catch(console.error);
