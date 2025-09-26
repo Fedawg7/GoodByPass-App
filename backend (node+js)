@@ -1,0 +1,80 @@
+// server.js
+const express = require('express');
+const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const bodyParser = require('body-parser');
+
+const app = express();
+app.use(bodyParser.json());
+
+const PRIVATE_KEY = fs.readFileSync('./server_private.pem', 'utf8');
+const PUBLIC_KEY = fs.readFileSync('./server_public.pem', 'utf8'); // for debugging
+const JWT_SIGN_KEY = fs.readFileSync('./jwt_signing_key.pem', 'utf8') || 'dev_jwt_secret'; // production: use secure key store
+
+// In-memory device store (replace with DB in production)
+const devices = {};
+
+// Helper: sign a payload (manifest) with RSA-SHA256 using PRIVATE_KEY
+function signManifest(manifestObj) {
+  const manifestJson = JSON.stringify(manifestObj);
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(manifestJson);
+  signer.end();
+  const signature = signer.sign(PRIVATE_KEY, 'base64');
+  return {
+    manifest: manifestObj,
+    signature
+  };
+}
+
+// Register device (device authenticates through secure operator flow; here simplified)
+app.post('/api/devices/register', (req, res) => {
+  const { deviceId, owner } = req.body;
+  if (!deviceId || !owner) return res.status(400).json({ error: 'deviceId and owner required' });
+  // create device record
+  devices[deviceId] = { deviceId, owner, createdAt: Date.now() };
+  // issue JWT for device use (short TTL)
+  const token = jwt.sign({ deviceId, owner }, JWT_SIGN_KEY, { algorithm: 'HS256', expiresIn: '1h' });
+  res.json({ deviceId, token });
+});
+
+// Protected endpoint example
+function authMiddleware(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: 'missing auth' });
+  const token = auth.split(' ')[1];
+  try {
+    const payload = jwt.verify(token, JWT_SIGN_KEY);
+    req.device = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'invalid token' });
+  }
+}
+
+// Serve a signed manifest for updates
+app.get('/api/updates/manifest', authMiddleware, (req, res) => {
+  // Only registered devices should be served; we check device existence
+  if (!devices[req.device.deviceId]) return res.status(403).json({ error: 'unregistered device' });
+
+  // Example manifest: versions, URL to update package, hash, timestamp
+  const manifestObj = {
+    version: '1.2.0',
+    timestamp: new Date().toISOString(),
+    packageUrl: 'https://example.com/updates/package-v1.2.0.bin',
+    packageHash: 'sha256:EXAMPLE_HASH_PLACEHOLDER',
+    notes: 'Security and stability improvements'
+  };
+
+  const signed = signManifest(manifestObj);
+  res.json(signed);
+});
+
+// Endpoint to fetch the public key for verification (read-only)
+app.get('/api/keys/public', (req, res) => {
+  res.type('text/plain').send(PUBLIC_KEY);
+});
+
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`Update server listening on ${PORT}`));
