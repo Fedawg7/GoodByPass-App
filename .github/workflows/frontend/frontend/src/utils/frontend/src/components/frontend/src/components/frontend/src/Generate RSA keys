@@ -1,0 +1,3 @@
+# generate 3072-bit key for stronger security
+openssl genpkey -algorithm RSA -out backend/keys/server_private.pem -pkeyopt rsa_keygen_bits:3072
+openssl rsa -pubout -in backend/keys/server_private.pem -out backend/keys/server_public.pem
